@@ -4,6 +4,8 @@
 
 You can use the unified method call_patcher_method(method, patcher_args) to invoke any of the four patching approaches. An example on how to use the package is provided in the notebook_example folder. The method is selected by an integer key (1, 2, 3, or 4), and the required arguments are passed via a dictionary.
 
+![alt text](figures/example.png)
+
 ### Available Patching Methods
 - **Sliding Window Patcher (method=1)**: Uniformly extracts patches using a sliding window across the image. General purpose tiling over the full image.
 Required Inputs:
