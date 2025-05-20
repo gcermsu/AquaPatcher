@@ -17,6 +17,7 @@ def grid_water_based_patcher(**kwargs):
 
 def random_polygon_based_patcher(**kwargs):
     print("Running random point-based patcher inside polygons.")
+    random_points_bbox_patcher.generate_random_points_polygons_patches(**kwargs)
 
 def call_patcher_method(method: int, patcher_args: dict):
     """Call the patcher method based on method number."""

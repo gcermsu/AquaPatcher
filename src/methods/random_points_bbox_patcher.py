@@ -1,36 +1,28 @@
 import os
+import pyproj
+import random
 import rasterio
 import numpy as np
 import xarray as xr
 import geopandas as gpd
 import rasterio.features
-from rasterio.windows import Window
+from functools import partial
+from shapely.ops import transform
 from shapely.geometry import Point
+from rasterio.windows import Window
+from shapely.geometry import Polygon
 
-from ground_truth.AlgalMask import AlgalMask
-from ground_truth import pos_visual_inspection
-
-functions = AlgalMask()
-
-def random_points_in_mask(mask_da: xr.DataArray, n_points: int) -> gpd.GeoDataFrame:
-    """Generate n random points inside a positive (1) binary raster mask."""
-    mask = mask_da.values[0,:,:]
-    valid_rows, valid_cols = np.where(mask == 1)
-
-    indices = np.random.choice(len(valid_rows), size=int(n_points), replace=False)
-    sample_rows = valid_rows[indices]
-    sample_cols = valid_cols[indices]
-
-    # Convert row/col to x/y using the affine transform
-    transform = mask_da.rio.transform()
-    xs, ys = rasterio.transform.xy(transform, sample_rows, sample_cols)
-    points = [Point(x, y) for x, y in zip(xs, ys)]
-    gdf = gpd.GeoDataFrame(geometry=points, crs=mask_da.rio.crs)
-
-    gdf["x"] = xs
-    gdf["y"] = ys
-
-    return gdf
+def generate_random_points_in_polygon(polygon, n_points):
+    '''Generates random points within a polygon.'''
+    minx, miny, maxx, maxy = polygon.bounds
+    points = []
+    attempts = 0
+    while len(points) < n_points and attempts < n_points * 100:
+        random_point = Point(random.uniform(minx, maxx), random.uniform(miny, maxy))
+        if polygon.contains(random_point):
+            points.append(random_point)
+        attempts += 1
+    return points
 
 def generate_geotiff_patches_from_points(
         points_gdf: gpd.GeoDataFrame,
@@ -104,24 +96,26 @@ def generate_geotiff_patches_from_points(
 
     print(f"Saved {patch_id} valid patches to: {output_dir}")
 
-def generate_points(input_img_files: str) -> gpd.GeoDataFrame:
+def generate_points(input_polygon_file: str) -> gpd.GeoDataFrame:
+    '''Return table of points inside the polygons'''
+    gdf_polygons = gpd.read_file(input_polygon_file)
+    target_crs = "EPSG:3857"
+    gdf_proj = gdf_polygons.to_crs(target_crs)
 
-    xda_blue, xda_green, xda_nir, xda_swir, xda_red, cloud_mask = pos_visual_inspection.read_images(input_img_files, ['B02', 'B03', 'B04', 'B05', 'B06', 'B11', 'cloud', 'CLOUD'])
-    water_mask = functions._create_water_mask(xda_swir, xda_green).astype(int) # 1 - water, 0 - non water
-    water_mask = water_mask + cloud_mask # Apply cloud mask to the water mask
+    all_points = []
 
-    clean_water_mask = water_mask.fillna(0)
+    for idx, row in gdf_proj.iterrows():
+        geom: Polygon = row.geometry
+        area_km2 = geom.area / 1e6  # Convert m² to km²
+        n_points = int((2.5 * area_km2) / 5.9)
+        points = generate_random_points_in_polygon(geom, n_points)
+        point_rows = [{"geometry": pt, "source_polygon_id": idx, "n_points": n_points} for pt in points]
+        all_points.extend(point_rows)
 
-    pixel_count = np.sum(clean_water_mask)
-    area_km2 = pixel_count * 900 / 1e6
-
-    points_count = (2.5 * area_km2)/5.9 # 1.5 is the overlapping proportion of each patch, 5.9 is the area (in km2) of a patch size of 256x256 pixels
-    gdf_points = random_points_in_mask(cloud_mask, points_count)
-
+    gdf_points = gpd.GeoDataFrame(all_points, crs=gdf_polygons.crs).to_crs(gdf_polygons.crs)
     return gdf_points
 
-def generate_regular_points_water_patches(input_img_files: str, input_path_mask: str, input_path_img: str, output_dir: str, patch_size: int = 256, min_valid_pixels = 3, set_nan: bool = True):
-
-    gdf_points = generate_points(input_img_files)
-
+def generate_random_points_polygons_patches(input_polygon_file: str, input_path_mask: str, input_path_img: str, output_dir: str, patch_size: int = 256, min_valid_pixels = 3, set_nan: bool = True):
+    '''Generate patches'''
+    gdf_points = generate_points(input_polygon_file)
     generate_geotiff_patches_from_points(gdf_points, input_path_mask, input_path_img, output_dir, patch_size, min_valid_pixels, set_nan)
