@@ -32,7 +32,7 @@ def bbox_to_window(src, bbox):
 
 def generate_geotiff_patches(
         input_path_mask: str,
-        input_path_img: str,
+        input_path_image: str,
         output_dir: str,
         patch_size: int = 256,
         stride: int = 128,
@@ -47,7 +47,7 @@ def generate_geotiff_patches(
     os.makedirs(out_img, exist_ok=True)
     os.makedirs(out_msk, exist_ok=True)
 
-    with rasterio.open(input_path_mask) as src_msk, rasterio.open(input_path_img) as src_img:
+    with rasterio.open(input_path_mask) as src_msk, rasterio.open(input_path_image) as src_img:
         width = src_msk.width
         height = src_msk.height
         profile_msk = src_msk.profile

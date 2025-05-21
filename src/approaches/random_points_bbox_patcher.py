@@ -1,38 +1,33 @@
 import os
+import random
 import rasterio
 import numpy as np
-import xarray as xr
 import geopandas as gpd
 import rasterio.features
-from rasterio.windows import Window
+from sklearn.neighbors import BallTree
 from shapely.geometry import Point
+from rasterio.windows import Window
+from shapely.geometry import Polygon
+from geopy.distance import geodesic
 
-from src import toolbox
+def generate_random_points_in_polygon(polygon, n_points) -> list:
+    '''Generates random points within a polygon.'''
+    minx, miny, maxx, maxy = polygon.bounds
+    points = []
+    attempts = 0
 
-def random_points_in_mask(mask_da: xr.DataArray, n_points: int) -> gpd.GeoDataFrame:
-    """Generate n random points inside a positive (1) binary raster mask."""
-    mask = mask_da.values[0,:,:]
-    valid_rows, valid_cols = np.where(mask == 1)
+    while len(points) < n_points and attempts < n_points * 100:
+        random_point = Point(random.uniform(minx, maxx), random.uniform(miny, maxy))
+        if polygon.contains(random_point):
+            points.append(random_point)
+        attempts += 1
 
-    indices = np.random.choice(len(valid_rows), size=int(n_points), replace=False)
-    sample_rows = valid_rows[indices]
-    sample_cols = valid_cols[indices]
-
-    # Convert row/col to x/y using the affine transform
-    transform = mask_da.rio.transform()
-    xs, ys = rasterio.transform.xy(transform, sample_rows, sample_cols)
-    points = [Point(x, y) for x, y in zip(xs, ys)]
-    gdf = gpd.GeoDataFrame(geometry=points, crs=mask_da.rio.crs)
-
-    gdf["x"] = xs
-    gdf["y"] = ys
-
-    return gdf
+    return points
 
 def generate_geotiff_patches_from_points(
         points_gdf: gpd.GeoDataFrame,
         input_path_mask: str,
-        input_path_img: str,
+        input_path_image: str,
         output_dir: str,
         patch_size: int = 256,
         min_valid_pixels: int = 3,
@@ -45,7 +40,7 @@ def generate_geotiff_patches_from_points(
     os.makedirs(out_img, exist_ok=True)
     os.makedirs(out_msk, exist_ok=True)
 
-    with rasterio.open(input_path_mask) as src_msk, rasterio.open(input_path_img) as src_img:
+    with rasterio.open(input_path_mask) as src_msk, rasterio.open(input_path_image) as src_img:
         profile_msk = src_msk.profile
         profile_img = src_img.profile
 
@@ -54,7 +49,7 @@ def generate_geotiff_patches_from_points(
             point = row.geometry
 
             # Convert point (x, y) to raster indices (col, row)
-            col, row = src_msk.index(point.x, point.y)
+            row, col = src_msk.index(point.x, point.y)
 
             # Calculate window upper-left corner to center on point
             half_size = patch_size // 2
@@ -101,23 +96,41 @@ def generate_geotiff_patches_from_points(
 
     print(f"Saved {patch_id} valid patches to: {output_dir}")
 
-def generate_points(input_img_files: str) -> gpd.GeoDataFrame:
-    '''Return table of points inside the water mask'''
-    xda_green, xda_swir, cloud_mask = toolbox.read_images(input_img_files, ['B03', 'B06', 'B11', 'cloud', 'CLOUD'])
-    water_mask = toolbox._create_water_mask(xda_swir, xda_green).astype(int) # 1 - water, 0 - non water
-    water_mask = water_mask + cloud_mask # Apply cloud mask to the water mask
+def generate_points(input_path_polygon: str, min_dist_m: float) -> gpd.GeoDataFrame:
+    '''Return table of points inside the polygons'''
+    gdf_polygons = gpd.read_file(input_path_polygon)
+    target_crs = "EPSG:3857"
 
-    clean_water_mask = water_mask.fillna(0)
+    all_points = []
 
-    pixel_count = np.sum(clean_water_mask)
-    area_km2 = pixel_count * 900 / 1e6
+    for idx, row in gdf_polygons.iterrows():
+        geom: Polygon = row.geometry
 
-    points_count = (2.5 * area_km2)/5.9 # 1.5 is the overlapping proportion of each patch, 5.9 is the area (in km2) of a patch size of 256x256 pixels
-    gdf_points = random_points_in_mask(cloud_mask, points_count)
+        gdf_row = gpd.GeoDataFrame([row], geometry='geometry', crs=gdf_polygons.crs)
+        gdf_proj = gdf_row.to_crs(target_crs)
+        area_km2 = gdf_proj.area / 1e6  # Convert m² to km²
+        n_points = int((1.2 * area_km2) / 5.9)
 
-    return gdf_points
+        points = generate_random_points_in_polygon(geom, n_points)
+        point_rows = [{"geometry": pt, "source_polygon_id": idx, "n_points": n_points} for pt in points]
+        all_points.extend(point_rows)
 
-def generate_random_points_water_patches(input_img_files: str, input_path_mask: str, input_path_img: str, output_dir: str, patch_size: int = 256, min_valid_pixels = 3, set_nan: bool = True):
+    gdf_points = gpd.GeoDataFrame(all_points, crs=gdf_polygons.crs).to_crs(gdf_polygons.crs)
+
+    # Drop closer points
+    original_crs = gdf_points.crs
+    gdf = gdf_points.to_crs(epsg=3857)
+
+    coords = np.array(list(zip(gdf.geometry.x, gdf.geometry.y)))
+    tree = BallTree(coords)
+    indices = tree.query_radius(coords, r=min_dist_m)
+
+    to_drop = [i for i, neighbors in enumerate(indices) if len(neighbors) > 1]
+    gdf_filtered = gdf.drop(index=to_drop).reset_index(drop=True).to_crs(original_crs)
+
+    return gdf_filtered
+
+def generate_random_points_polygons_patches(input_path_polygon: str, input_path_mask: str, input_path_image: str, output_dir: str, patch_size: int = 256, min_valid_pixels = 3, set_nan: bool = True, min_dist_m: float = 3000):
     '''Generate patches'''
-    gdf_points = generate_points(input_img_files)
-    generate_geotiff_patches_from_points(gdf_points, input_path_mask, input_path_img, output_dir, patch_size, min_valid_pixels, set_nan)
+    gdf_points = generate_points(input_path_polygon, min_dist_m)
+    generate_geotiff_patches_from_points(gdf_points, input_path_mask, input_path_image, output_dir, patch_size, min_valid_pixels, set_nan)

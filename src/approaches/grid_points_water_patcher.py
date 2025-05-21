@@ -1,28 +1,38 @@
 import os
-import pyproj
-import random
 import rasterio
 import numpy as np
 import xarray as xr
 import geopandas as gpd
 import rasterio.features
-from functools import partial
-from shapely.ops import transform
 from shapely.geometry import Point
 from rasterio.windows import Window
-from shapely.geometry import Polygon
 
-def generate_random_points_in_polygon(polygon, n_points):
-    '''Generates random points within a polygon.'''
-    minx, miny, maxx, maxy = polygon.bounds
-    points = []
-    attempts = 0
-    while len(points) < n_points and attempts < n_points * 100:
-        random_point = Point(random.uniform(minx, maxx), random.uniform(miny, maxy))
-        if polygon.contains(random_point):
-            points.append(random_point)
-        attempts += 1
-    return points
+from src import toolbox
+
+def regular_points_in_mask(mask_da: xr.DataArray, spacing: int) -> gpd.GeoDataFrame:
+    """Generate regularly spaced points inside a binary mask (value == 1)."""
+    mask = mask_da.values[0, :, :]  # (rows, cols)
+    transform = mask_da.rio.transform()
+    crs = mask_da.rio.crs
+    height, width = mask.shape
+
+    rows = np.arange(0, height, spacing)
+    cols = np.arange(0, width, spacing)
+    grid_rows, grid_cols = np.meshgrid(rows, cols, indexing="ij")
+    grid_rows = grid_rows.flatten()
+    grid_cols = grid_cols.flatten()
+
+    valid_mask = mask[grid_rows, grid_cols] == 1
+    valid_rows = grid_rows[valid_mask]
+    valid_cols = grid_cols[valid_mask]
+
+    xs, ys = rasterio.transform.xy(transform, valid_rows, valid_cols)
+    points = [Point(x, y) for x, y in zip(xs, ys)]
+    gdf = gpd.GeoDataFrame(geometry=points, crs=crs)
+    gdf["x"] = xs
+    gdf["y"] = ys
+
+    return gdf
 
 def generate_geotiff_patches_from_points(
         points_gdf: gpd.GeoDataFrame,
@@ -34,7 +44,6 @@ def generate_geotiff_patches_from_points(
         set_nan: bool = True
 ):
     """Generate patches centered on GeoDataFrame points and save valid ones as GeoTIFFs."""
-
     out_img = os.path.join(output_dir, "imgs")
     out_msk = os.path.join(output_dir, "masks")
     os.makedirs(out_img, exist_ok=True)
@@ -48,10 +57,8 @@ def generate_geotiff_patches_from_points(
         for _, row in points_gdf.iterrows():
             point = row.geometry
 
-            # Convert point (x, y) to raster indices (col, row)
-            col, row = src_msk.index(point.x, point.y)
+            row, col = src_msk.index(point.x, point.y)
 
-            # Calculate window upper-left corner to center on point
             half_size = patch_size // 2
             row_off = row - half_size
             col_off = col - half_size
@@ -59,12 +66,10 @@ def generate_geotiff_patches_from_points(
             window = Window(col_off, row_off, patch_size, patch_size)
             patch_mask = src_msk.read(1, window=window)
 
-            # Check valid pixels in mask
             if np.count_nonzero(patch_mask == 1) >= min_valid_pixels:
                 patch_img = src_img.read(window=window)
                 transform = src_msk.window_transform(window)
 
-                # Set -9999 and nan as 0
                 if set_nan:
                     patch_img = np.where((patch_img == -9999) | np.isnan(patch_img), 0, patch_img)
 
@@ -96,26 +101,16 @@ def generate_geotiff_patches_from_points(
 
     print(f"Saved {patch_id} valid patches to: {output_dir}")
 
-def generate_points(input_polygon_file: str) -> gpd.GeoDataFrame:
-    '''Return table of points inside the polygons'''
-    gdf_polygons = gpd.read_file(input_polygon_file)
-    target_crs = "EPSG:3857"
-    gdf_proj = gdf_polygons.to_crs(target_crs)
-
-    all_points = []
-
-    for idx, row in gdf_proj.iterrows():
-        geom: Polygon = row.geometry
-        area_km2 = geom.area / 1e6  # Convert m² to km²
-        n_points = int((2.5 * area_km2) / 5.9)
-        points = generate_random_points_in_polygon(geom, n_points)
-        point_rows = [{"geometry": pt, "source_polygon_id": idx, "n_points": n_points} for pt in points]
-        all_points.extend(point_rows)
-
-    gdf_points = gpd.GeoDataFrame(all_points, crs=gdf_polygons.crs).to_crs(gdf_polygons.crs)
+def generate_points(input_img_files: str, spacing_grid: int) -> gpd.GeoDataFrame:
+    '''Return table of points inside the water mask'''
+    xda_green, xda_swir, cloud_mask = toolbox.read_images(input_img_files, ['B03', 'B06', 'B11', 'cloud', 'CLOUD'])
+    water_mask = toolbox._create_water_mask(xda_swir, xda_green).astype(int) # 1 - water, 0 - non water
+    water_mask = water_mask + cloud_mask # Apply cloud mask to the water mask
+    clean_water_mask = water_mask.fillna(0)
+    gdf_points = regular_points_in_mask(clean_water_mask, spacing_grid)
     return gdf_points
 
-def generate_random_points_polygons_patches(input_polygon_file: str, input_path_mask: str, input_path_img: str, output_dir: str, patch_size: int = 256, min_valid_pixels = 3, set_nan: bool = True):
+def generate_grid_points_water_patches(input_img_files: str, input_path_mask: str, input_path_image: str, output_dir: str, patch_size: int = 256, min_valid_pixels = 3, set_nan: bool = True, spacing_grid: int = 100):
     '''Generate patches'''
-    gdf_points = generate_points(input_polygon_file)
-    generate_geotiff_patches_from_points(gdf_points, input_path_mask, input_path_img, output_dir, patch_size, min_valid_pixels, set_nan)
+    gdf_points = generate_points(input_img_files, spacing_grid)
+    generate_geotiff_patches_from_points(gdf_points, input_path_mask, input_path_image, output_dir, patch_size, min_valid_pixels, set_nan)

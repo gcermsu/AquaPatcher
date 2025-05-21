@@ -3,12 +3,18 @@ import numpy as np
 import xarray as xr
 import rioxarray as rxr
 
-def _create_water_mask(self, swir: xr.DataArray, green: xr.DataArray) -> xr.DataArray:
+def _create_water_mask(swir: xr.DataArray, green: xr.DataArray) -> xr.DataArray:
     """Create mask for water pixels."""
-    swir_mask = swir < self.WATER_THRESHOLDS['swir']
+
+    WATER_THRESHOLDS = {
+        'swir': 0.03,
+        'mndwi': 0.3
+    }
+
+    swir_mask = swir < WATER_THRESHOLDS['swir']
     mndwi = (green - swir) / (green + swir)
-    mndwi_mask = mndwi > self.WATER_THRESHOLDS['mndwi']
-    return swir_mask & mndwi_mask
+    mndwi_mask = mndwi > WATER_THRESHOLDS['mndwi']
+    return mndwi_mask
 
 def _find_band_file(band_paths, band_key: str):
     """Helper method to find band files based on band key."""
@@ -51,10 +57,9 @@ def read_images(img_path: str, bands_name):
     # Find band files
     green_file = _find_band_file(band_paths, 'green')
     swir_file = _find_band_file(band_paths, 'swir')
-    red_file = _find_band_file(band_paths, 'red')
     cloud_file = _find_band_file(band_paths, 'cloud')
 
-    crs_band = return_crs(img_path, red_file)
+    crs_band = return_crs(img_path, green_file)
 
     # Load bands
     xda_green = _load_and_preprocess_band(img_path, green_file).rio.write_crs(crs_band)
