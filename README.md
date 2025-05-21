@@ -37,6 +37,7 @@ Required Inputs:
     - *patch_size (default: 256)*: Size of the square patch in pixels.
     - *min_valid_pixels (default: 3)*: Minimum positive pixels in the patch mask.
     - *set_nan (default: True)*: Replace NaN and -9999 with 0 in the image.
+    - *min_dist_m (default: 3000)*: Minimum distance allowed between two centroids (in meters)
 
 - **Random Polygon-Based Patcher (method=4)**: Randomly samples patch centers within user-provided polygons (e.g., lakes, river segments). Custom geographic areas of interest (AOIs).
   - *input_path_polygon*: Path to the polygon file (.gpkg) defining AOIs. Ensure the CRS of the polygon file matches the CRS of the input image.
@@ -46,6 +47,7 @@ Required Inputs:
   - *patch_size (default: 256)*: Size of the square patch in pixels.
   - *min_valid_pixels (default: 3)*: Minimum positive pixels in the patch mask.
   - *set_nan (default: True)*: Replace NaN and -9999 with 0 in the image.
+  - *min_dist_m (default: 3000)*: Minimum distance allowed between two points (in meters)
 
 ### Dependencies management and package installation
 To ensure smooth operation, the package relies on several Python libraries. To set up the environment and install the package, you can recreate the conda environment with all the necessary dependencies. This command should be run from the root of the repository:
