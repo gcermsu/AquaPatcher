@@ -68,7 +68,8 @@ def generate_geotiff_patches_from_points(
         output_dir: str,
         patch_size: int = 256,
         min_valid_pixels: int = 3,
-        set_nan: bool = True
+        set_nan: bool = True,
+        drop_edge: bool = True
 ):
     """Generate patches centered on GeoDataFrame points and save valid ones as GeoTIFFs."""
 
@@ -104,6 +105,13 @@ def generate_geotiff_patches_from_points(
                 # Set -9999 and nan as 0
                 if set_nan:
                     patch_img = np.where((patch_img == -9999) | np.isnan(patch_img), 0, patch_img)
+
+                # Droping small masks on the edge
+                if drop_edge:
+                    total_pixels = patch_img.size
+                    zero_pixels = np.count_nonzero(patch_img == 0)
+                    zero_ratio = zero_pixels / total_pixels
+                    if zero_ratio > 0.7: continue
 
                 out_profile_mask = profile_msk.copy()
                 out_profile_mask.update({
@@ -149,7 +157,7 @@ def generate_points(input_img_files: str, min_dist_m: float) -> gpd.GeoDataFrame
 
     return gdf_points
 
-def generate_random_points_water_patches(input_img_files: str, input_path_mask: str, input_path_image: str, output_dir: str, patch_size: int = 256, min_valid_pixels = 3, set_nan: bool = True, min_dist_m: float = 3000):
+def generate_random_points_water_patches(input_img_files: str, input_path_mask: str, input_path_image: str, output_dir: str, patch_size: int = 256, min_valid_pixels = 3, set_nan: bool = True, min_dist_m: float = 3000, drop_edge: bool = True):
     '''Generate patches'''
     gdf_points = generate_points(input_img_files, min_dist_m)
-    generate_geotiff_patches_from_points(gdf_points, input_path_mask, input_path_image, output_dir, patch_size, min_valid_pixels, set_nan)
+    generate_geotiff_patches_from_points(gdf_points, input_path_mask, input_path_image, output_dir, patch_size, min_valid_pixels, set_nan, drop_edge)
