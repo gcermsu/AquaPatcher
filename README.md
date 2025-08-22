@@ -1,5 +1,8 @@
-# AquaPatcher
+<div align="center" id="sglangtop">
+<img src="figures/logo.png" alt="logo" width="800" margin="10px"></img>
+</div>
 
+--------------------------------------------------------------------------------
 **AquaPatcher** is a Python package designed for extracting image patches from remote sensing imagery over aquatic environments. It supports multiple patch generation strategies optimized for water-based applications such as water quality monitoring and aquatic feature segmentation. The extracted patches can be used for training deep learning models, validating segmentation results, or performing statistical analysis.
 
 You can use the unified method call_patcher_method(method, patcher_args) to invoke any of the four patching approaches. An example on how to use the package is provided in the notebook_example folder. The method is selected by an integer key (1, 2, 3, or 4), and the required arguments are passed via a dictionary.
